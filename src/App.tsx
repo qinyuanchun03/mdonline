@@ -147,10 +147,18 @@ export default function App() {
   const [showSaveToast, setShowSaveToast] = useState(false);
   const [activePane, setActivePane] = useState<'editor' | 'preview' | null>(null);
   const [mobileView, setMobileView] = useState<'editor' | 'preview'>('editor');
+  const [isExportOpen, setIsExportOpen] = useState(false);
   
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // click outside to close export dropdown
+  useEffect(() => {
+    const handleClickOutside = () => setIsExportOpen(false);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
 
   // Auto-save debounced
   useEffect(() => {
@@ -262,7 +270,7 @@ export default function App() {
           </button>
         </div>
         
-        <div className="flex items-center gap-2 md:gap-4 overflow-x-auto hide-scrollbar pb-1 md:pb-0">
+        <div className="flex items-center gap-2 md:gap-4 flex-wrap justify-end pb-1 md:pb-0">
           <div className="flex items-center gap-1.5 text-xs md:text-sm text-gray-500 whitespace-nowrap shrink-0">
             {isSaved ? (
               <span className="flex items-center gap-1"><Check size={14} /> <span className="hidden sm:inline">{t.saved}</span></span>
@@ -298,25 +306,30 @@ export default function App() {
             <span className="hidden sm:inline">{t.import}</span>
           </button>
           
-          <div className="relative group shrink-0">
-            <button className="flex items-center gap-1.5 md:gap-2 px-2.5 md:px-3 py-1.5 md:py-2 text-xs md:text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer">
+          <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+            <button 
+              onClick={() => setIsExportOpen(!isExportOpen)}
+              className="flex items-center gap-1.5 md:gap-2 px-2.5 md:px-3 py-1.5 md:py-2 text-xs md:text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+            >
               <Download size={14} className="md:w-4 md:h-4" />
               <span className="hidden sm:inline">{t.export}</span>
             </button>
-            <div className="absolute right-0 mt-1 w-28 md:w-32 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-              <button 
-                onClick={() => handleExport('md')}
-                className="w-full text-left px-4 py-2 text-xs md:text-sm hover:bg-gray-50 first:rounded-t-lg cursor-pointer"
-              >
-                {t.asMd}
-              </button>
-              <button 
-                onClick={() => handleExport('txt')}
-                className="w-full text-left px-4 py-2 text-xs md:text-sm hover:bg-gray-50 last:rounded-b-lg cursor-pointer"
-              >
-                {t.asTxt}
-              </button>
-            </div>
+            {isExportOpen && (
+              <div className="absolute right-0 mt-1 w-28 md:w-32 bg-white border border-gray-200 rounded-lg shadow-lg transition-all duration-200 z-50">
+                <button 
+                  onClick={() => { handleExport('md'); setIsExportOpen(false); }}
+                  className="w-full text-left px-4 py-2 text-xs md:text-sm hover:bg-gray-50 first:rounded-t-lg cursor-pointer"
+                >
+                  {t.asMd}
+                </button>
+                <button 
+                  onClick={() => { handleExport('txt'); setIsExportOpen(false); }}
+                  className="w-full text-left px-4 py-2 text-xs md:text-sm hover:bg-gray-50 last:rounded-b-lg cursor-pointer"
+                >
+                  {t.asTxt}
+                </button>
+              </div>
+            )}
           </div>
           
           <button 
