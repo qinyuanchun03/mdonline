@@ -57,6 +57,23 @@ export const viralScriptService = {
     return data;
   },
 
+  searchSimilarScripts: async (queryText: string, limit = 3) => {
+    const supabase = getSupabase();
+    if (!supabase) return [];
+
+    const { data, error } = await supabase
+      .from('viral_scripts')
+      .select('title, content, category, analysis_notes')
+      .or(`title.ilike.%${queryText}%,content.ilike.%${queryText}%`)
+      .limit(limit);
+    
+    if (error) {
+      console.warn("Search similar scripts failed:", error);
+      return [];
+    }
+    return data;
+  },
+
   checkConnection: async () => {
     const supabase = getSupabase();
     if (!supabase) return false;

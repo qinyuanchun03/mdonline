@@ -69,6 +69,7 @@ const translations = {
     savedStatus: "Saved",
     manualSave: "Save Settings",
     searching: "Searching for references...",
+    prewarming: "Pre-warming: Analyzing viral database...",
     reading: "Reading and analyzing content...",
     generating: "Generating script...",
     references: "References",
@@ -139,6 +140,7 @@ const translations = {
     savedStatus: "已保存",
     manualSave: "保存设置",
     searching: "正在搜索参考资料...",
+    prewarming: "预热中：正在分析爆款库...",
     reading: "正在阅读并分析内容...",
     generating: "正在生成文案...",
     references: "参考资料",
@@ -560,7 +562,24 @@ export default function App() {
       const currentProvider = settings.searchProvider || 'bing';
       const movieName = markdown.trim();
       
-      // Prioritize Douban search
+      // 0. Pre-warmup: Search viral database
+      let viralContext = "";
+      if (supabaseConnected) {
+        setGenProgress(t.prewarming);
+        try {
+          const similarScripts = await viralScriptService.searchSimilarScripts(movieName);
+          if (similarScripts && similarScripts.length > 0) {
+            viralContext = similarScripts.map((s, i) => 
+              `[Viral Reference ${i + 1}]\nTitle: ${s.title}\nCategory: ${s.category}\nNotes: ${s.analysis_notes}\nContent Snippet: ${s.content.substring(0, 500)}...`
+            ).join('\n\n');
+          }
+        } catch (e) {
+          console.warn("Pre-warmup failed", e);
+        }
+      }
+
+      // 1. Search for references
+      setGenProgress(t.searching);
       const doubanQuery = `${movieName} site:douban.com`;
       const generalQuery = `${movieName} 剧情 电影解说`;
       
@@ -596,7 +615,7 @@ export default function App() {
       searchContext = uniqueResults.map((r, i) => `[Reference ${i + 1}]\nTitle: ${r.title}\nContent: ${r.snippet}\nURL: ${r.url}`).join('\n\n');
       
       setGenProgress(t.generating);
-      const result = await aiService.generateMovieReview(movieName, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId, searchContext);
+      const result = await aiService.generateMovieReview(movieName, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId, searchContext, viralContext);
       
       // Append references to the end in a clean bibliography style
       let finalContent = result.text;
