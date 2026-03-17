@@ -80,7 +80,9 @@ const translations = {
     collectCategoryPlaceholder: "e.g. Suspense, Sci-Fi...",
     collectPublic: "Make Public",
     collectSubmit: "Confirm Collection",
-    collectCancel: "Cancel"
+    collectCancel: "Cancel",
+    collectNotes: "Analysis Notes",
+    collectNotesPlaceholder: "Add some insights or performance analysis..."
   },
   zh: {
     appName: "超便利编辑器",
@@ -148,7 +150,9 @@ const translations = {
     collectCategoryPlaceholder: "例如：悬疑、科幻、反转...",
     collectPublic: "公开分享",
     collectSubmit: "确认收录",
-    collectCancel: "取消"
+    collectCancel: "取消",
+    collectNotes: "分析笔记",
+    collectNotesPlaceholder: "添加一些见解或表现分析..."
   }
 };
 
@@ -283,6 +287,8 @@ export default function App() {
   const [genProgress, setGenProgress] = useState<string | null>(null);
   const [searchSources, setSearchSources] = useState<{title: string, url: string}[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
+  const [collectData, setCollectData] = useState({ title: '', category: '', notes: '', isPublic: false });
   const [isCollecting, setIsCollecting] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -470,25 +476,35 @@ export default function App() {
     storageService.saveDocuments(updatedDocs);
     setIsSaved(true);
 
-    // 2. Cloud Sync (Supabase) if connected
+    // 2. Cloud Sync (Supabase) if connected - Open Modal
     if (supabaseConnected) {
-      setIsCollecting(true);
-      try {
-        await viralScriptService.saveViralScript({
-          title: filename || t.untitled,
-          content: markdown,
-          category: 'Default',
-          is_public: false,
-        });
-      } catch (error) {
-        console.error("Cloud sync failed:", error);
-      } finally {
-        setIsCollecting(false);
-      }
+      setCollectData(prev => ({ ...prev, title: filename || t.untitled }));
+      setIsCollectModalOpen(true);
+    } else {
+      setShowSaveToast(true);
+      setTimeout(() => setShowSaveToast(false), 2000);
     }
+  };
 
-    setShowSaveToast(true);
-    setTimeout(() => setShowSaveToast(false), 2000);
+  const handleConfirmCloudSync = async () => {
+    setIsCollecting(true);
+    try {
+      await viralScriptService.saveViralScript({
+        title: collectData.title || filename || t.untitled,
+        content: markdown,
+        category: collectData.category,
+        analysis_notes: collectData.notes,
+        is_public: collectData.isPublic,
+      });
+      setShowSaveToast(true);
+      setTimeout(() => setShowSaveToast(false), 2000);
+      setIsCollectModalOpen(false);
+    } catch (error) {
+      console.error("Cloud sync failed:", error);
+      alert("Cloud sync failed. Please check your configuration.");
+    } finally {
+      setIsCollecting(false);
+    }
   };
 
   const handleCreateNew = () => {
@@ -1366,6 +1382,94 @@ export default function App() {
               exit={{ opacity: 0 }}
               onClick={() => setIsSettingsOpen(false)}
               className="fixed inset-0 bg-black/40 backdrop-blur-md z-[-1]"
+            />
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Collect Modal */}
+      <AnimatePresence>
+        {isCollectModalOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative z-10"
+            >
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-emerald-50">
+                <h3 className="font-bold text-emerald-800 flex items-center gap-2">
+                  <Save size={18} />
+                  {t.collect}
+                </h3>
+                <button onClick={() => setIsCollectModalOpen(false)} className="p-1 hover:bg-emerald-100 rounded-full transition-colors text-emerald-600">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold text-gray-700">{t.collectTitle}</label>
+                  <input 
+                    type="text"
+                    value={collectData.title}
+                    onChange={(e) => setCollectData({ ...collectData, title: e.target.value })}
+                    placeholder={filename || t.untitled}
+                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold text-gray-700">{t.collectCategory}</label>
+                  <input 
+                    type="text"
+                    value={collectData.category}
+                    onChange={(e) => setCollectData({ ...collectData, category: e.target.value })}
+                    placeholder={t.collectCategoryPlaceholder}
+                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold text-gray-700">{t.collectNotes}</label>
+                  <textarea 
+                    value={collectData.notes}
+                    onChange={(e) => setCollectData({ ...collectData, notes: e.target.value })}
+                    placeholder={t.collectNotesPlaceholder}
+                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm h-24 resize-none"
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <input 
+                    type="checkbox"
+                    id="isPublic"
+                    checked={collectData.isPublic}
+                    onChange={(e) => setCollectData({ ...collectData, isPublic: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                  />
+                  <label htmlFor="isPublic" className="text-sm font-medium text-gray-700">{t.collectPublic}</label>
+                </div>
+              </div>
+              <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
+                <button 
+                  onClick={() => setIsCollectModalOpen(false)}
+                  className="flex-1 px-4 py-2 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition-all"
+                >
+                  {t.collectCancel}
+                </button>
+                <button 
+                  onClick={handleConfirmCloudSync}
+                  disabled={isCollecting}
+                  className="flex-1 px-4 py-2 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 flex items-center justify-center gap-2"
+                >
+                  {isCollecting ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Save size={16} />}
+                  {t.collectSubmit}
+                </button>
+              </div>
+            </motion.div>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCollectModalOpen(false)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-md z-0"
             />
           </div>
         )}
