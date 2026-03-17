@@ -27,6 +27,7 @@ export interface AppSettings {
   supabaseUrl?: string;
   supabaseKey?: string;
   autoSave: boolean;
+  persona: 'classic' | 'immersive';
 }
 
 export interface AIResponse {

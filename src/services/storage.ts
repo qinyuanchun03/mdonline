@@ -16,6 +16,7 @@ export const storageService = {
       theme: 'light',
       autoSave: true,
       searchProvider: 'bing',
+      persona: 'classic'
     };
     return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings;
   },

@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { 
   Download, Upload, Save, LayoutTemplate, Check, Globe, 
   Edit2, Eye, Settings, Menu, Plus, Trash2, Sparkles, X,
-  FileText, Code, Type, History, Clock, MoreVertical, ChevronRight
+  FileText, Code, Type, History, Clock, MoreVertical, ChevronRight, User
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { storageService } from './services/storage';
@@ -71,6 +71,9 @@ const translations = {
     searching: "Searching for references...",
     prewarming: "Pre-warming: Analyzing viral database...",
     reading: "Reading and analyzing content...",
+    persona: "Persona",
+    personaClassic: "Classic Humorist",
+    personaImmersive: "Immersive Storyteller",
     generating: "Generating script...",
     references: "References",
     doubanPriority: "Prioritizing Douban...",
@@ -142,6 +145,9 @@ const translations = {
     searching: "正在搜索参考资料...",
     prewarming: "预热中：正在分析爆款库...",
     reading: "正在阅读并分析内容...",
+    persona: "解说人格",
+    personaClassic: "幽默说书人",
+    personaImmersive: "沉浸式分享者",
     generating: "正在生成文案...",
     references: "参考资料",
     doubanPriority: "优先检索豆瓣...",
@@ -615,7 +621,15 @@ export default function App() {
       searchContext = uniqueResults.map((r, i) => `[Reference ${i + 1}]\nTitle: ${r.title}\nContent: ${r.snippet}\nURL: ${r.url}`).join('\n\n');
       
       setGenProgress(t.generating);
-      const result = await aiService.generateMovieReview(movieName, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId, searchContext, viralContext);
+      const result = await aiService.generateMovieReview(
+        movieName, 
+        settings.aiApiKey, 
+        settings.aiBaseUrl, 
+        settings.aiModelId, 
+        searchContext, 
+        viralContext,
+        settings.persona
+      );
       
       // Append references to the end in a clean bibliography style
       let finalContent = result.text;
@@ -1243,6 +1257,37 @@ export default function App() {
                     </label>
                     <span className="text-[10px] px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded font-bold uppercase">{t.experimental}</span>
                   </div>
+
+                  {/* Persona Selection */}
+                  <div className="space-y-2 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
+                    <label className="text-xs font-bold text-indigo-700 flex items-center gap-2">
+                      <User size={14} />
+                      {t.persona}
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => updateSettings({ ...settings, persona: 'classic' })}
+                        className={`py-2 px-3 rounded-lg border text-[10px] font-bold transition-all ${
+                          settings.persona === 'classic'
+                            ? 'bg-white border-indigo-500 text-indigo-700 shadow-sm'
+                            : 'bg-white/50 border-gray-200 text-gray-500 hover:bg-white'
+                        }`}
+                      >
+                        {t.personaClassic}
+                      </button>
+                      <button
+                        onClick={() => updateSettings({ ...settings, persona: 'immersive' })}
+                        className={`py-2 px-3 rounded-lg border text-[10px] font-bold transition-all ${
+                          settings.persona === 'immersive'
+                            ? 'bg-white border-indigo-500 text-indigo-700 shadow-sm'
+                            : 'bg-white/50 border-gray-200 text-gray-500 hover:bg-white'
+                        }`}
+                      >
+                        {t.personaImmersive}
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="space-y-1.5">
                     <span className="text-xs text-gray-500">{t.apiKey}</span>
                     <input 
