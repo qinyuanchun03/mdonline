@@ -20,12 +20,12 @@ const translations = {
     unsaved: "Unsaved...",
     import: "Import",
     export: "Export",
-    save: "Save",
+    save: "Save & Sync",
     markdownPane: "Markdown",
     previewPane: "Preview",
     chars: "chars",
     placeholder: "Start typing your markdown here...",
-    saveSuccess: "Saved successfully",
+    saveSuccess: "Saved & Synced successfully",
     asMd: "As .md",
     asTxt: "As .txt",
     untitled: "Untitled document",
@@ -49,7 +49,7 @@ const translations = {
     noHistory: "No history available.",
     currentVersion: "Current Version",
     actions: "Actions",
-    saveVersion: "Save Version",
+    saveVersion: "Save & Sync",
     htmlTemplate: "HTML Template",
     reactTemplate: "React Template",
     renderingIn: "Rendering in",
@@ -73,7 +73,7 @@ const translations = {
     generating: "Generating script...",
     references: "References",
     doubanPriority: "Prioritizing Douban...",
-    collect: "Collect to Viral Library",
+    collect: "Save & Sync",
     collectSuccess: "Successfully collected to viral library!",
     collectTitle: "Script Title",
     collectCategory: "Category",
@@ -88,12 +88,12 @@ const translations = {
     unsaved: "未保存...",
     import: "导入",
     export: "导出",
-    save: "保存",
+    save: "保存并同步",
     markdownPane: "编辑区",
     previewPane: "预览区",
     chars: "字符",
     placeholder: "在此开始输入 Markdown...",
-    saveSuccess: "保存成功",
+    saveSuccess: "保存并同步成功",
     asMd: "导出为 .md",
     asTxt: "导出为 .txt",
     untitled: "未命名文档",
@@ -117,7 +117,7 @@ const translations = {
     noHistory: "暂无历史记录。",
     currentVersion: "当前版本",
     actions: "操作",
-    saveVersion: "保存版本",
+    saveVersion: "保存并同步",
     htmlTemplate: "HTML 模板",
     reactTemplate: "React 模板",
     renderingIn: "渲染倒计时",
@@ -141,7 +141,7 @@ const translations = {
     generating: "正在生成文案...",
     references: "参考资料",
     doubanPriority: "优先检索豆瓣...",
-    collect: "收录到爆款库",
+    collect: "保存并同步",
     collectSuccess: "已成功收录到爆款库！",
     collectTitle: "文案标题",
     collectCategory: "所属类别",
@@ -283,8 +283,6 @@ export default function App() {
   const [genProgress, setGenProgress] = useState<string | null>(null);
   const [searchSources, setSearchSources] = useState<{title: string, url: string}[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
-  const [collectData, setCollectData] = useState({ title: '', category: '', isPublic: false });
   const [isCollecting, setIsCollecting] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -429,20 +427,20 @@ export default function App() {
     setIsSaved(true);
   };
 
-  const handleManualSave = () => {
+  const handleUnifiedSave = async () => {
+    // 1. Local Save (Version History)
     const updatedDocs = documents.map(doc => {
       if (doc.id === currentDoc.id) {
         const lastSnapshot = doc.snapshots?.[0];
         let newSnapshots = doc.snapshots || [];
         
-        // Only create a snapshot if content changed since last snapshot
         if (!lastSnapshot || lastSnapshot.content !== markdown) {
           const newSnapshot: Snapshot = {
             id: crypto.randomUUID(),
             timestamp: Date.now(),
             content: markdown
           };
-          newSnapshots = [newSnapshot, ...newSnapshots].slice(0, 15); // Keep last 15
+          newSnapshots = [newSnapshot, ...newSnapshots].slice(0, 15);
         }
         
         return { ...doc, content: markdown, title: filename, mode: editorMode, lastModified: Date.now(), snapshots: newSnapshots };
@@ -471,6 +469,24 @@ export default function App() {
     setDocuments(updatedDocs);
     storageService.saveDocuments(updatedDocs);
     setIsSaved(true);
+
+    // 2. Cloud Sync (Supabase) if connected
+    if (supabaseConnected) {
+      setIsCollecting(true);
+      try {
+        await viralScriptService.saveViralScript({
+          title: filename || t.untitled,
+          content: markdown,
+          category: 'Default',
+          is_public: false,
+        });
+      } catch (error) {
+        console.error("Cloud sync failed:", error);
+      } finally {
+        setIsCollecting(false);
+      }
+    }
+
     setShowSaveToast(true);
     setTimeout(() => setShowSaveToast(false), 2000);
   };
@@ -582,30 +598,6 @@ export default function App() {
     } finally {
       setIsAiLoading(false);
       setGenProgress(null);
-    }
-  };
-
-  const handleCollect = async () => {
-    if (!markdown.trim()) return;
-    if (!supabaseConnected) {
-      alert("Supabase connection failed or RLS blocked. Please check your configuration.");
-      return;
-    }
-    setIsCollecting(true);
-    try {
-      await viralScriptService.saveViralScript({
-        title: collectData.title || filename || t.untitled,
-        content: markdown,
-        category: collectData.category,
-        is_public: collectData.isPublic,
-      });
-      alert(t.collectSuccess);
-      setIsCollectModalOpen(false);
-      setCollectData({ title: '', category: '', isPublic: false });
-    } catch (error: any) {
-      alert(error.message || "Collection Error");
-    } finally {
-      setIsCollecting(false);
     }
   };
 
@@ -836,15 +828,7 @@ export default function App() {
                   <FileText size={14} className={isAiLoading ? 'animate-pulse' : ''} />
                   <span>{(settings.searchProvider === 'bing' ? settings.bingApiKey : settings.tavilyApiKey) ? t.searchAndGenerate : t.movieReview}</span>
                 </button>
-                <button 
-                  onClick={() => setIsCollectModalOpen(true)}
-                  disabled={isAiLoading || !markdown.trim()}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${isAiLoading || !markdown.trim() ? 'text-gray-400 cursor-not-allowed' : 'text-emerald-700 hover:bg-white hover:shadow-sm'}`}
-                  title={t.collect}
-                >
-                  <Save size={14} />
-                  <span>{t.collect}</span>
-                </button>
+
               </div>
               
               <div className="w-px h-6 bg-gray-300 mx-1"></div>
@@ -884,26 +868,20 @@ export default function App() {
               </button>
               
               <button 
-                onClick={handleManualSave}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm"
-              >
-                <Save size={14} />
-                <span>{t.saveVersion}</span>
-              </button>
-
-              <button 
-                onClick={() => setIsCollectModalOpen(true)}
-                disabled={supabaseConnected === false}
+                onClick={handleUnifiedSave}
+                disabled={isCollecting}
                 className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-all shadow-sm ${
-                  supabaseConnected === true 
+                  supabaseConnected 
                     ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
-                    : supabaseConnected === false 
-                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-                      : 'bg-emerald-100 text-emerald-600 animate-pulse'
+                    : 'bg-indigo-600 text-white hover:bg-indigo-700'
                 }`}
               >
-                <Save size={14} />
-                <span>{t.collect}</span>
+                {isCollecting ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <Save size={14} />
+                )}
+                <span>{supabaseConnected ? t.save : t.saveVersion}</span>
               </button>
 
               <button 
@@ -917,10 +895,15 @@ export default function App() {
             {/* Mobile Actions */}
             <div className="flex md:hidden items-center gap-1.5">
               <button 
-                onClick={handleManualSave}
-                className="p-2 bg-indigo-600 text-white rounded-lg shadow-sm"
+                onClick={handleUnifiedSave}
+                disabled={isCollecting}
+                className={`p-2 rounded-lg shadow-sm text-white ${supabaseConnected ? 'bg-emerald-600' : 'bg-indigo-600'}`}
               >
-                <Save size={16} />
+                {isCollecting ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <Save size={16} />
+                )}
               </button>
               <div className="relative" onClick={(e) => e.stopPropagation()}>
                 <button 
@@ -942,18 +925,6 @@ export default function App() {
                       </button>
                       <button onClick={() => { handleMovieReview(); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-violet-700 bg-violet-50/50 hover:bg-violet-50 border-b border-gray-100">
                         <FileText size={16} /> {t.movieReview}
-                      </button>
-                      <button 
-                        onClick={() => { if(supabaseConnected) setIsCollectModalOpen(true); setIsMobileMenuOpen(false); }} 
-                        disabled={supabaseConnected === false}
-                        className={`w-full flex items-center gap-2 px-4 py-3 text-sm border-b border-gray-100 transition-colors ${
-                          supabaseConnected === true 
-                            ? 'text-emerald-700 bg-emerald-50/50 hover:bg-emerald-50' 
-                            : 'text-gray-400 bg-gray-50/50 cursor-not-allowed'
-                        }`}
-                      >
-                        <Save size={16} /> {t.collect}
-                        {supabaseConnected === false && <span className="ml-auto text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded">OFF</span>}
                       </button>
                       <button onClick={() => { setIsHistoryOpen(true); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 border-b border-gray-100">
                         <Clock size={16} /> {t.versionHistory}
@@ -1395,85 +1366,6 @@ export default function App() {
               exit={{ opacity: 0 }}
               onClick={() => setIsSettingsOpen(false)}
               className="fixed inset-0 bg-black/40 backdrop-blur-md z-[-1]"
-            />
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Collect Modal */}
-      <AnimatePresence>
-        {isCollectModalOpen && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative z-10"
-            >
-              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-emerald-50">
-                <h3 className="font-bold text-emerald-800 flex items-center gap-2">
-                  <Save size={18} />
-                  {t.collect}
-                </h3>
-                <button onClick={() => setIsCollectModalOpen(false)} className="p-1 hover:bg-emerald-100 rounded-full transition-colors text-emerald-600">
-                  <X size={20} />
-                </button>
-              </div>
-              <div className="p-6 space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-gray-700">{t.collectTitle}</label>
-                  <input 
-                    type="text"
-                    value={collectData.title}
-                    onChange={(e) => setCollectData({ ...collectData, title: e.target.value })}
-                    placeholder={filename || t.untitled}
-                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-gray-700">{t.collectCategory}</label>
-                  <input 
-                    type="text"
-                    value={collectData.category}
-                    onChange={(e) => setCollectData({ ...collectData, category: e.target.value })}
-                    placeholder={t.collectCategoryPlaceholder}
-                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
-                  />
-                </div>
-                <div className="flex items-center gap-2 pt-2">
-                  <input 
-                    type="checkbox"
-                    id="isPublic"
-                    checked={collectData.isPublic}
-                    onChange={(e) => setCollectData({ ...collectData, isPublic: e.target.checked })}
-                    className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
-                  />
-                  <label htmlFor="isPublic" className="text-sm font-medium text-gray-700">{t.collectPublic}</label>
-                </div>
-              </div>
-              <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
-                <button 
-                  onClick={() => setIsCollectModalOpen(false)}
-                  className="flex-1 px-4 py-2 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition-all"
-                >
-                  {t.collectCancel}
-                </button>
-                <button 
-                  onClick={handleCollect}
-                  disabled={isCollecting}
-                  className="flex-1 px-4 py-2 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 flex items-center justify-center gap-2"
-                >
-                  {isCollecting ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Save size={16} />}
-                  {t.collectSubmit}
-                </button>
-              </div>
-            </motion.div>
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsCollectModalOpen(false)}
-              className="fixed inset-0 bg-black/40 backdrop-blur-md z-0"
             />
           </div>
         )}
