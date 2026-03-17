@@ -15,6 +15,7 @@ export const storageService = {
       language: navigator.language.startsWith('zh') ? 'zh' : 'en',
       theme: 'light',
       autoSave: true,
+      searchProvider: 'bing',
     };
     return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings;
   },

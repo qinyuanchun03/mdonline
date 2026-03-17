@@ -21,6 +21,9 @@ export interface AppSettings {
   aiApiKey?: string;
   aiBaseUrl?: string;
   aiModelId?: string;
+  searchProvider: 'bing' | 'tavily';
+  bingApiKey?: string;
+  tavilyApiKey?: string;
   supabaseUrl?: string;
   supabaseKey?: string;
   autoSave: boolean;

@@ -9,6 +9,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { storageService } from './services/storage';
 import { aiService } from './services/ai';
+import { searchService } from './services/search';
 import { Document, EditorMode, AppSettings, Snapshot } from './types';
 
 const translations = {
@@ -37,8 +38,8 @@ const translations = {
     history: "History",
     newDoc: "New Document",
     delete: "Delete",
-    apiKey: "Gemini API Key",
-    apiKeyPlaceholder: "Enter your API key...",
+    apiKey: "API Key",
+    apiKeyPlaceholder: "Enter your OpenAI-compatible API key...",
     layoutFirst: "Layout-First Mode",
     experimental: "Experimental",
     versionHistory: "Version History",
@@ -54,10 +55,15 @@ const translations = {
     rendered: "Rendered",
     overwriteConfirm: "This will overwrite your current code. Continue?",
     apiBaseUrl: "API Base URL",
-    apiBaseUrlPlaceholder: "Enter custom API base URL (optional)...",
+    apiBaseUrlPlaceholder: "https://api.openai.com/v1",
     apiModelId: "Model ID",
-    apiModelIdPlaceholder: "Enter custom model ID (default: gemini-3-flash-preview)...",
-    movieReview: "Movie Review Script"
+    apiModelIdPlaceholder: "gpt-3.5-turbo",
+    searchProvider: "Search Provider",
+    bingApiKey: "Bing API Key",
+    tavilyApiKey: "Tavily API Key",
+    searchApiKeyPlaceholder: "Enter API key...",
+    movieReview: "Movie Review Script",
+    searchAndGenerate: "Search & Generate"
   },
   zh: {
     appName: "超便利编辑器",
@@ -84,8 +90,8 @@ const translations = {
     history: "历史记录",
     newDoc: "新建文档",
     delete: "删除",
-    apiKey: "Gemini API 密钥",
-    apiKeyPlaceholder: "输入您的 API 密钥...",
+    apiKey: "API 密钥",
+    apiKeyPlaceholder: "输入 OpenAI 兼容的 API 密钥...",
     layoutFirst: "排版优先模式",
     experimental: "实验性",
     versionHistory: "历史版本",
@@ -101,10 +107,15 @@ const translations = {
     rendered: "已渲染",
     overwriteConfirm: "这会覆盖您当前的代码，确定继续吗？",
     apiBaseUrl: "API 代理地址",
-    apiBaseUrlPlaceholder: "输入自定义 API 代理地址 (可选)...",
+    apiBaseUrlPlaceholder: "https://api.openai.com/v1",
     apiModelId: "模型 ID",
-    apiModelIdPlaceholder: "输入自定义模型 ID (默认: gemini-3-flash-preview)...",
-    movieReview: "电影解说文案"
+    apiModelIdPlaceholder: "gpt-3.5-turbo",
+    searchProvider: "搜索服务商",
+    bingApiKey: "Bing API 密钥",
+    tavilyApiKey: "Tavily API 密钥",
+    searchApiKeyPlaceholder: "输入 API 密钥...",
+    movieReview: "电影解说文案",
+    searchAndGenerate: "搜索并生成"
   }
 };
 
@@ -454,12 +465,29 @@ export default function App() {
 
   const handleMovieReview = async () => {
     if (!markdown.trim()) {
-      alert(settings.language === 'zh' ? "请先输入一些电影信息或剧情梗概" : "Please enter some movie info or plot summary first");
+      alert(settings.language === 'zh' ? "请先输入电影名称或剧情梗概" : "Please enter movie name or plot summary first");
       return;
     }
     setIsAiLoading(true);
     try {
-      const result = await aiService.generateMovieReview(markdown, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId);
+      let searchContext = "";
+      const currentProvider = settings.searchProvider || 'bing';
+      
+      if (currentProvider === 'bing' && settings.bingApiKey) {
+        try {
+          searchContext = await searchService.searchBing(markdown + " 剧情 电影解说", settings.bingApiKey);
+        } catch (searchError) {
+          console.warn("Bing search failed, proceeding without context", searchError);
+        }
+      } else if (currentProvider === 'tavily' && settings.tavilyApiKey) {
+        try {
+          searchContext = await searchService.searchTavily(markdown + " 剧情 电影解说", settings.tavilyApiKey);
+        } catch (searchError) {
+          console.warn("Tavily search failed, proceeding without context", searchError);
+        }
+      }
+      
+      const result = await aiService.generateMovieReview(markdown, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId, searchContext);
       setMarkdown(result.text);
       setIsSaved(false);
     } catch (error: any) {
@@ -668,10 +696,10 @@ export default function App() {
                   onClick={handleMovieReview}
                   disabled={isAiLoading}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${isAiLoading ? 'text-gray-400 cursor-not-allowed' : 'text-violet-700 hover:bg-white hover:shadow-sm'}`}
-                  title={t.movieReview}
+                  title={(settings.searchProvider === 'bing' ? settings.bingApiKey : settings.tavilyApiKey) ? t.searchAndGenerate : t.movieReview}
                 >
                   <FileText size={14} className={isAiLoading ? 'animate-pulse' : ''} />
-                  <span>{t.movieReview}</span>
+                  <span>{(settings.searchProvider === 'bing' ? settings.bingApiKey : settings.tavilyApiKey) ? t.searchAndGenerate : t.movieReview}</span>
                 </button>
               </div>
               
@@ -1044,6 +1072,63 @@ export default function App() {
                       placeholder={t.apiModelIdPlaceholder}
                       className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
                     />
+                  </div>
+                  <div className="space-y-3 pt-2 border-t border-gray-100">
+                    <label className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                      <Globe size={16} className="text-emerald-500" />
+                      {t.searchProvider}
+                    </label>
+                    <div className="flex gap-2">
+                      {['bing', 'tavily'].map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => {
+                            const newSettings: AppSettings = { ...settings, searchProvider: p as any };
+                            setSettings(newSettings);
+                            storageService.saveSettings(newSettings);
+                          }}
+                          className={`flex-1 py-2 px-3 rounded-lg border text-xs font-bold transition-all ${
+                            (settings.searchProvider || 'bing') === p
+                              ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm'
+                              : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {p.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                    
+                    {(settings.searchProvider || 'bing') === 'bing' ? (
+                      <div className="space-y-1.5">
+                        <span className="text-xs text-gray-500">{t.bingApiKey}</span>
+                        <input 
+                          type="password"
+                          value={settings.bingApiKey || ''}
+                          onChange={(e) => {
+                            const newSettings: AppSettings = { ...settings, bingApiKey: e.target.value };
+                            setSettings(newSettings);
+                            storageService.saveSettings(newSettings);
+                          }}
+                          placeholder={t.searchApiKeyPlaceholder}
+                          className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                        />
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <span className="text-xs text-gray-500">{t.tavilyApiKey}</span>
+                        <input 
+                          type="password"
+                          value={settings.tavilyApiKey || ''}
+                          onChange={(e) => {
+                            const newSettings: AppSettings = { ...settings, tavilyApiKey: e.target.value };
+                            setSettings(newSettings);
+                            storageService.saveSettings(newSettings);
+                          }}
+                          placeholder={t.searchApiKeyPlaceholder}
+                          className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
 
