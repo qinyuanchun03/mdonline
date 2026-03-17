@@ -52,7 +52,12 @@ const translations = {
     reactTemplate: "React Template",
     renderingIn: "Rendering in",
     rendered: "Rendered",
-    overwriteConfirm: "This will overwrite your current code. Continue?"
+    overwriteConfirm: "This will overwrite your current code. Continue?",
+    apiBaseUrl: "API Base URL",
+    apiBaseUrlPlaceholder: "Enter custom API base URL (optional)...",
+    apiModelId: "Model ID",
+    apiModelIdPlaceholder: "Enter custom model ID (default: gemini-3-flash-preview)...",
+    movieReview: "Movie Review Script"
   },
   zh: {
     appName: "超便利编辑器",
@@ -94,7 +99,12 @@ const translations = {
     reactTemplate: "React 模板",
     renderingIn: "渲染倒计时",
     rendered: "已渲染",
-    overwriteConfirm: "这会覆盖您当前的代码，确定继续吗？"
+    overwriteConfirm: "这会覆盖您当前的代码，确定继续吗？",
+    apiBaseUrl: "API 代理地址",
+    apiBaseUrlPlaceholder: "输入自定义 API 代理地址 (可选)...",
+    apiModelId: "模型 ID",
+    apiModelIdPlaceholder: "输入自定义模型 ID (默认: gemini-3-flash-preview)...",
+    movieReview: "电影解说文案"
   }
 };
 
@@ -432,7 +442,24 @@ export default function App() {
   const handleAiOptimize = async () => {
     setIsAiLoading(true);
     try {
-      const result = await aiService.optimizeLayout(markdown, settings.aiApiKey);
+      const result = await aiService.optimizeLayout(markdown, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId);
+      setMarkdown(result.text);
+      setIsSaved(false);
+    } catch (error: any) {
+      alert(error.message || "AI Error");
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const handleMovieReview = async () => {
+    if (!markdown.trim()) {
+      alert(settings.language === 'zh' ? "请先输入一些电影信息或剧情梗概" : "Please enter some movie info or plot summary first");
+      return;
+    }
+    setIsAiLoading(true);
+    try {
+      const result = await aiService.generateMovieReview(markdown, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId);
       setMarkdown(result.text);
       setIsSaved(false);
     } catch (error: any) {
@@ -627,15 +654,26 @@ export default function App() {
 
             {/* Desktop Actions */}
             <div className="hidden md:flex items-center gap-2">
-              <button 
-                onClick={handleAiOptimize}
-                disabled={isAiLoading}
-                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg transition-all ${isAiLoading ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-700 border border-indigo-100 hover:shadow-md'}`}
-                title={t.aiAssistant}
-              >
-                <Sparkles size={16} className={isAiLoading ? 'animate-pulse' : ''} />
-                <span>{t.aiAssistant}</span>
-              </button>
+              <div className="flex bg-gray-100 p-1 rounded-lg gap-1">
+                <button 
+                  onClick={handleAiOptimize}
+                  disabled={isAiLoading}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${isAiLoading ? 'text-gray-400 cursor-not-allowed' : 'text-indigo-700 hover:bg-white hover:shadow-sm'}`}
+                  title={t.aiAssistant}
+                >
+                  <Sparkles size={14} className={isAiLoading ? 'animate-pulse' : ''} />
+                  <span>{t.aiAssistant}</span>
+                </button>
+                <button 
+                  onClick={handleMovieReview}
+                  disabled={isAiLoading}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${isAiLoading ? 'text-gray-400 cursor-not-allowed' : 'text-violet-700 hover:bg-white hover:shadow-sm'}`}
+                  title={t.movieReview}
+                >
+                  <FileText size={14} className={isAiLoading ? 'animate-pulse' : ''} />
+                  <span>{t.movieReview}</span>
+                </button>
+              </div>
               
               <div className="w-px h-6 bg-gray-300 mx-1"></div>
               
@@ -714,6 +752,9 @@ export default function App() {
                     >
                       <button onClick={() => { handleAiOptimize(); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-indigo-700 bg-indigo-50/50 hover:bg-indigo-50 border-b border-gray-100">
                         <Sparkles size={16} /> {t.aiAssistant}
+                      </button>
+                      <button onClick={() => { handleMovieReview(); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-violet-700 bg-violet-50/50 hover:bg-violet-50 border-b border-gray-100">
+                        <FileText size={16} /> {t.movieReview}
                       </button>
                       <button onClick={() => { setIsHistoryOpen(true); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 border-b border-gray-100">
                         <Clock size={16} /> {t.versionHistory}
@@ -973,6 +1014,34 @@ export default function App() {
                         storageService.saveSettings(newSettings);
                       }}
                       placeholder={t.apiKeyPlaceholder}
+                      className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <span className="text-xs text-gray-500">{t.apiBaseUrl}</span>
+                    <input 
+                      type="text"
+                      value={settings.aiBaseUrl || ''}
+                      onChange={(e) => {
+                        const newSettings: AppSettings = { ...settings, aiBaseUrl: e.target.value };
+                        setSettings(newSettings);
+                        storageService.saveSettings(newSettings);
+                      }}
+                      placeholder={t.apiBaseUrlPlaceholder}
+                      className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <span className="text-xs text-gray-500">{t.apiModelId}</span>
+                    <input 
+                      type="text"
+                      value={settings.aiModelId || ''}
+                      onChange={(e) => {
+                        const newSettings: AppSettings = { ...settings, aiModelId: e.target.value };
+                        setSettings(newSettings);
+                        storageService.saveSettings(newSettings);
+                      }}
+                      placeholder={t.apiModelIdPlaceholder}
                       className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
                     />
                   </div>

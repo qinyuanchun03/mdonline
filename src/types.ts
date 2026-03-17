@@ -19,6 +19,8 @@ export interface AppSettings {
   language: 'en' | 'zh';
   theme: 'light' | 'dark' | 'system';
   aiApiKey?: string;
+  aiBaseUrl?: string;
+  aiModelId?: string;
   supabaseUrl?: string;
   supabaseKey?: string;
   autoSave: boolean;
