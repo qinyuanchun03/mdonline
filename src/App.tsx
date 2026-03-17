@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { storageService } from './services/storage';
 import { aiService } from './services/ai';
 import { searchService } from './services/search';
+import { viralScriptService } from './services/supabase';
 import { Document, EditorMode, AppSettings, Snapshot } from './types';
 
 const translations = {
@@ -63,7 +64,23 @@ const translations = {
     tavilyApiKey: "Tavily API Key",
     searchApiKeyPlaceholder: "Enter API key...",
     movieReview: "Movie Review Script",
-    searchAndGenerate: "Search & Generate"
+    searchAndGenerate: "Search & Generate",
+    autoSaving: "Auto-saving...",
+    savedStatus: "Saved",
+    manualSave: "Save Settings",
+    searching: "Searching for references...",
+    reading: "Reading and analyzing content...",
+    generating: "Generating script...",
+    references: "References",
+    doubanPriority: "Prioritizing Douban...",
+    collect: "Collect to Viral Library",
+    collectSuccess: "Successfully collected to viral library!",
+    collectTitle: "Script Title",
+    collectCategory: "Category",
+    collectCategoryPlaceholder: "e.g. Suspense, Sci-Fi...",
+    collectPublic: "Make Public",
+    collectSubmit: "Confirm Collection",
+    collectCancel: "Cancel"
   },
   zh: {
     appName: "超便利编辑器",
@@ -115,7 +132,23 @@ const translations = {
     tavilyApiKey: "Tavily API 密钥",
     searchApiKeyPlaceholder: "输入 API 密钥...",
     movieReview: "电影解说文案",
-    searchAndGenerate: "搜索并生成"
+    searchAndGenerate: "搜索并生成",
+    autoSaving: "自动保存中...",
+    savedStatus: "已保存",
+    manualSave: "保存设置",
+    searching: "正在搜索参考资料...",
+    reading: "正在阅读并分析内容...",
+    generating: "正在生成文案...",
+    references: "参考资料",
+    doubanPriority: "优先检索豆瓣...",
+    collect: "收录到爆款库",
+    collectSuccess: "已成功收录到爆款库！",
+    collectTitle: "文案标题",
+    collectCategory: "所属类别",
+    collectCategoryPlaceholder: "例如：悬疑、科幻、反转...",
+    collectPublic: "公开分享",
+    collectSubmit: "确认收录",
+    collectCancel: "取消"
   }
 };
 
@@ -247,9 +280,18 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [genProgress, setGenProgress] = useState<string | null>(null);
+  const [searchSources, setSearchSources] = useState<{title: string, url: string}[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
+  const [collectData, setCollectData] = useState({ title: '', category: '', isPublic: false });
+  const [isCollecting, setIsCollecting] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [supabaseConnected, setSupabaseConnected] = useState<boolean | null>(null);
+  const [settingsStatus, setSettingsStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
+  const settingsTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isFirstSettingsChange = useRef(true);
 
   const t = translations[settings.language];
   
@@ -300,6 +342,15 @@ export default function App() {
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, []);
+
+  // Supabase Connection Check
+  useEffect(() => {
+    const checkSupabase = async () => {
+      const isConnected = await viralScriptService.checkConnection();
+      setSupabaseConnected(isConnected);
+    };
+    checkSupabase();
+  }, [settings]);
 
   // Auto-save debounced
   useEffect(() => {
@@ -469,31 +520,92 @@ export default function App() {
       return;
     }
     setIsAiLoading(true);
+    setGenProgress(t.searching);
+    setSearchSources([]);
+    
     try {
       let searchContext = "";
       const currentProvider = settings.searchProvider || 'bing';
+      const movieName = markdown.trim();
+      
+      // Prioritize Douban search
+      const doubanQuery = `${movieName} site:douban.com`;
+      const generalQuery = `${movieName} 剧情 电影解说`;
+      
+      let allResults: any[] = [];
       
       if (currentProvider === 'bing' && settings.bingApiKey) {
         try {
-          searchContext = await searchService.searchBing(markdown + " 剧情 电影解说", settings.bingApiKey);
+          setGenProgress(t.doubanPriority);
+          const doubanResults = await searchService.searchBing(doubanQuery, settings.bingApiKey);
+          setGenProgress(t.searching);
+          const generalResults = await searchService.searchBing(generalQuery, settings.bingApiKey);
+          allResults = [...doubanResults, ...generalResults];
         } catch (searchError) {
-          console.warn("Bing search failed, proceeding without context", searchError);
+          console.warn("Bing search failed", searchError);
         }
       } else if (currentProvider === 'tavily' && settings.tavilyApiKey) {
         try {
-          searchContext = await searchService.searchTavily(markdown + " 剧情 电影解说", settings.tavilyApiKey);
+          setGenProgress(t.doubanPriority);
+          const doubanResults = await searchService.searchTavily(doubanQuery, settings.tavilyApiKey);
+          setGenProgress(t.searching);
+          const generalResults = await searchService.searchTavily(generalQuery, settings.tavilyApiKey);
+          allResults = [...doubanResults, ...generalResults];
         } catch (searchError) {
-          console.warn("Tavily search failed, proceeding without context", searchError);
+          console.warn("Tavily search failed", searchError);
         }
       }
+
+      // Filter unique results by URL
+      const uniqueResults = Array.from(new Map(allResults.map(item => [item.url, item])).values());
+      setSearchSources(uniqueResults.map(r => ({ title: r.title, url: r.url })));
       
-      const result = await aiService.generateMovieReview(markdown, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId, searchContext);
-      setMarkdown(result.text);
+      setGenProgress(t.reading);
+      searchContext = uniqueResults.map((r, i) => `[Reference ${i + 1}]\nTitle: ${r.title}\nContent: ${r.snippet}\nURL: ${r.url}`).join('\n\n');
+      
+      setGenProgress(t.generating);
+      const result = await aiService.generateMovieReview(movieName, settings.aiApiKey, settings.aiBaseUrl, settings.aiModelId, searchContext);
+      
+      // Append references to the end in a clean bibliography style
+      let finalContent = result.text;
+      if (uniqueResults.length > 0) {
+        finalContent += `\n\n---\n**${t.references}**\n\n`;
+        uniqueResults.forEach((r, i) => {
+          finalContent += `[${i + 1}] ${r.title}  \n&nbsp;&nbsp;&nbsp;&nbsp;🔗 [${r.url}](${r.url})\n\n`;
+        });
+      }
+
+      setMarkdown(finalContent);
       setIsSaved(false);
     } catch (error: any) {
       alert(error.message || "AI Error");
     } finally {
       setIsAiLoading(false);
+      setGenProgress(null);
+    }
+  };
+
+  const handleCollect = async () => {
+    if (!markdown.trim()) return;
+    if (!supabaseConnected) {
+      alert("Supabase connection failed or RLS blocked. Please check your configuration.");
+      return;
+    }
+    setIsCollecting(true);
+    try {
+      await viralScriptService.saveViralScript({
+        title: collectData.title || filename || t.untitled,
+        content: markdown,
+        category: collectData.category,
+        is_public: collectData.isPublic,
+      });
+      alert(t.collectSuccess);
+      setIsCollectModalOpen(false);
+      setCollectData({ title: '', category: '', isPublic: false });
+    } catch (error: any) {
+      alert(error.message || "Collection Error");
+    } finally {
+      setIsCollecting(false);
     }
   };
 
@@ -554,11 +666,34 @@ export default function App() {
     }
   };
 
+  const saveSettingsToStorage = (newSettings: AppSettings) => {
+    storageService.saveSettings(newSettings);
+    setSettingsStatus('saved');
+    setTimeout(() => setSettingsStatus('idle'), 2000);
+  };
+
+  const updateSettings = (newSettings: AppSettings, immediate = false) => {
+    setSettings(newSettings);
+    setSettingsStatus('saving');
+    
+    if (settingsTimerRef.current) {
+      clearTimeout(settingsTimerRef.current);
+    }
+    
+    if (immediate || isFirstSettingsChange.current) {
+      isFirstSettingsChange.current = false;
+      saveSettingsToStorage(newSettings);
+    } else {
+      settingsTimerRef.current = setTimeout(() => {
+        saveSettingsToStorage(newSettings);
+      }, 5000);
+    }
+  };
+
   const toggleLang = () => {
     const newLang: 'en' | 'zh' = settings.language === 'en' ? 'zh' : 'en';
     const newSettings: AppSettings = { ...settings, language: newLang };
-    setSettings(newSettings);
-    storageService.saveSettings(newSettings);
+    updateSettings(newSettings, true);
   };
 
   const loadTemplate = (type: 'html' | 'react') => {
@@ -701,6 +836,15 @@ export default function App() {
                   <FileText size={14} className={isAiLoading ? 'animate-pulse' : ''} />
                   <span>{(settings.searchProvider === 'bing' ? settings.bingApiKey : settings.tavilyApiKey) ? t.searchAndGenerate : t.movieReview}</span>
                 </button>
+                <button 
+                  onClick={() => setIsCollectModalOpen(true)}
+                  disabled={isAiLoading || !markdown.trim()}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all ${isAiLoading || !markdown.trim() ? 'text-gray-400 cursor-not-allowed' : 'text-emerald-700 hover:bg-white hover:shadow-sm'}`}
+                  title={t.collect}
+                >
+                  <Save size={14} />
+                  <span>{t.collect}</span>
+                </button>
               </div>
               
               <div className="w-px h-6 bg-gray-300 mx-1"></div>
@@ -748,6 +892,21 @@ export default function App() {
               </button>
 
               <button 
+                onClick={() => setIsCollectModalOpen(true)}
+                disabled={supabaseConnected === false}
+                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-all shadow-sm ${
+                  supabaseConnected === true 
+                    ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
+                    : supabaseConnected === false 
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
+                      : 'bg-emerald-100 text-emerald-600 animate-pulse'
+                }`}
+              >
+                <Save size={14} />
+                <span>{t.collect}</span>
+              </button>
+
+              <button 
                 onClick={() => setIsSettingsOpen(true)}
                 className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
               >
@@ -784,6 +943,18 @@ export default function App() {
                       <button onClick={() => { handleMovieReview(); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-violet-700 bg-violet-50/50 hover:bg-violet-50 border-b border-gray-100">
                         <FileText size={16} /> {t.movieReview}
                       </button>
+                      <button 
+                        onClick={() => { if(supabaseConnected) setIsCollectModalOpen(true); setIsMobileMenuOpen(false); }} 
+                        disabled={supabaseConnected === false}
+                        className={`w-full flex items-center gap-2 px-4 py-3 text-sm border-b border-gray-100 transition-colors ${
+                          supabaseConnected === true 
+                            ? 'text-emerald-700 bg-emerald-50/50 hover:bg-emerald-50' 
+                            : 'text-gray-400 bg-gray-50/50 cursor-not-allowed'
+                        }`}
+                      >
+                        <Save size={16} /> {t.collect}
+                        {supabaseConnected === false && <span className="ml-auto text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded">OFF</span>}
+                      </button>
                       <button onClick={() => { setIsHistoryOpen(true); setIsMobileMenuOpen(false); }} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 border-b border-gray-100">
                         <Clock size={16} /> {t.versionHistory}
                       </button>
@@ -813,6 +984,41 @@ export default function App() {
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+          {/* AI Progress Overlay */}
+          <AnimatePresence>
+            {isAiLoading && genProgress && (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-white/80 backdrop-blur-sm z-40 flex flex-col items-center justify-center p-6 text-center"
+              >
+                <div className="w-16 h-16 mb-6 relative">
+                  <div className="absolute inset-0 border-4 border-indigo-100 rounded-full"></div>
+                  <div className="absolute inset-0 border-4 border-indigo-600 rounded-full border-t-transparent animate-spin"></div>
+                </div>
+                <h3 className="text-lg font-bold text-gray-900 mb-2">{genProgress}</h3>
+                
+                {searchSources.length > 0 && (
+                  <div className="max-w-md w-full mt-4 space-y-2 text-left">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">{t.references}</p>
+                    <div className="max-h-48 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                      {searchSources.map((source, idx) => (
+                        <div key={idx} className="flex items-start gap-2 p-2 bg-white border border-gray-100 rounded-lg shadow-sm">
+                          <Globe size={14} className="text-gray-400 shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-gray-700 truncate">{source.title}</p>
+                            <p className="text-[10px] text-gray-400 truncate">{source.url}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Editor Pane */}
           <div 
             className={`w-full md:w-1/2 flex-col border-r border-gray-200 bg-white h-full ${mobileView === 'editor' ? 'flex' : 'hidden md:flex'}`}
@@ -1038,8 +1244,7 @@ export default function App() {
                       value={settings.aiApiKey || ''}
                       onChange={(e) => {
                         const newSettings: AppSettings = { ...settings, aiApiKey: e.target.value };
-                        setSettings(newSettings);
-                        storageService.saveSettings(newSettings);
+                        updateSettings(newSettings);
                       }}
                       placeholder={t.apiKeyPlaceholder}
                       className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
@@ -1052,8 +1257,7 @@ export default function App() {
                       value={settings.aiBaseUrl || ''}
                       onChange={(e) => {
                         const newSettings: AppSettings = { ...settings, aiBaseUrl: e.target.value };
-                        setSettings(newSettings);
-                        storageService.saveSettings(newSettings);
+                        updateSettings(newSettings);
                       }}
                       placeholder={t.apiBaseUrlPlaceholder}
                       className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
@@ -1066,8 +1270,7 @@ export default function App() {
                       value={settings.aiModelId || ''}
                       onChange={(e) => {
                         const newSettings: AppSettings = { ...settings, aiModelId: e.target.value };
-                        setSettings(newSettings);
-                        storageService.saveSettings(newSettings);
+                        updateSettings(newSettings);
                       }}
                       placeholder={t.apiModelIdPlaceholder}
                       className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm"
@@ -1084,8 +1287,7 @@ export default function App() {
                           key={p}
                           onClick={() => {
                             const newSettings: AppSettings = { ...settings, searchProvider: p as any };
-                            setSettings(newSettings);
-                            storageService.saveSettings(newSettings);
+                            updateSettings(newSettings);
                           }}
                           className={`flex-1 py-2 px-3 rounded-lg border text-xs font-bold transition-all ${
                             (settings.searchProvider || 'bing') === p
@@ -1106,8 +1308,7 @@ export default function App() {
                           value={settings.bingApiKey || ''}
                           onChange={(e) => {
                             const newSettings: AppSettings = { ...settings, bingApiKey: e.target.value };
-                            setSettings(newSettings);
-                            storageService.saveSettings(newSettings);
+                            updateSettings(newSettings);
                           }}
                           placeholder={t.searchApiKeyPlaceholder}
                           className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
@@ -1121,8 +1322,7 @@ export default function App() {
                           value={settings.tavilyApiKey || ''}
                           onChange={(e) => {
                             const newSettings: AppSettings = { ...settings, tavilyApiKey: e.target.value };
-                            setSettings(newSettings);
-                            storageService.saveSettings(newSettings);
+                            updateSettings(newSettings);
                           }}
                           placeholder={t.searchApiKeyPlaceholder}
                           className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
@@ -1146,13 +1346,47 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="p-4 bg-gray-50 border-t border-gray-100 flex justify-end">
-                <button 
-                  onClick={() => setIsSettingsOpen(false)}
-                  className="px-6 py-2 bg-gray-900 text-white rounded-xl font-medium hover:bg-black transition-colors"
-                >
-                  Close
-                </button>
+              <div className="p-4 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AnimatePresence mode="wait">
+                    {settingsStatus === 'saving' && (
+                      <motion.div 
+                        key="saving"
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 10 }}
+                        className="flex items-center gap-2 text-xs text-indigo-500 font-medium"
+                      >
+                        <Clock size={12} className="animate-spin" />
+                        {t.autoSaving}
+                      </motion.div>
+                    )}
+                    {settingsStatus === 'saved' && (
+                      <motion.div 
+                        key="saved"
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 10 }}
+                        className="flex items-center gap-2 text-xs text-emerald-500 font-medium"
+                      >
+                        <Check size={12} />
+                        {t.savedStatus}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      saveSettingsToStorage(settings);
+                      setIsSettingsOpen(false);
+                    }}
+                    className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 transition-colors flex items-center gap-2"
+                  >
+                    <Save size={16} />
+                    {t.manualSave}
+                  </button>
+                </div>
               </div>
             </motion.div>
             <motion.div 
@@ -1161,6 +1395,85 @@ export default function App() {
               exit={{ opacity: 0 }}
               onClick={() => setIsSettingsOpen(false)}
               className="fixed inset-0 bg-black/40 backdrop-blur-md z-[-1]"
+            />
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Collect Modal */}
+      <AnimatePresence>
+        {isCollectModalOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden relative z-10"
+            >
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-emerald-50">
+                <h3 className="font-bold text-emerald-800 flex items-center gap-2">
+                  <Save size={18} />
+                  {t.collect}
+                </h3>
+                <button onClick={() => setIsCollectModalOpen(false)} className="p-1 hover:bg-emerald-100 rounded-full transition-colors text-emerald-600">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold text-gray-700">{t.collectTitle}</label>
+                  <input 
+                    type="text"
+                    value={collectData.title}
+                    onChange={(e) => setCollectData({ ...collectData, title: e.target.value })}
+                    placeholder={filename || t.untitled}
+                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold text-gray-700">{t.collectCategory}</label>
+                  <input 
+                    type="text"
+                    value={collectData.category}
+                    onChange={(e) => setCollectData({ ...collectData, category: e.target.value })}
+                    placeholder={t.collectCategoryPlaceholder}
+                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <input 
+                    type="checkbox"
+                    id="isPublic"
+                    checked={collectData.isPublic}
+                    onChange={(e) => setCollectData({ ...collectData, isPublic: e.target.checked })}
+                    className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
+                  />
+                  <label htmlFor="isPublic" className="text-sm font-medium text-gray-700">{t.collectPublic}</label>
+                </div>
+              </div>
+              <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
+                <button 
+                  onClick={() => setIsCollectModalOpen(false)}
+                  className="flex-1 px-4 py-2 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition-all"
+                >
+                  {t.collectCancel}
+                </button>
+                <button 
+                  onClick={handleCollect}
+                  disabled={isCollecting}
+                  className="flex-1 px-4 py-2 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 flex items-center justify-center gap-2"
+                >
+                  {isCollecting ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <Save size={16} />}
+                  {t.collectSubmit}
+                </button>
+              </div>
+            </motion.div>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCollectModalOpen(false)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-md z-0"
             />
           </div>
         )}

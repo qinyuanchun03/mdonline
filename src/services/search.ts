@@ -1,6 +1,12 @@
 
+export interface SearchResult {
+  title: string;
+  snippet: string;
+  url: string;
+}
+
 export const searchService = {
-  searchBing: async (query: string, apiKey: string): Promise<string> => {
+  searchBing: async (query: string, apiKey: string): Promise<SearchResult[]> => {
     try {
       const response = await fetch(`https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(query)}&count=10`, {
         headers: {
@@ -15,14 +21,18 @@ export const searchService = {
       const data = await response.json();
       const results = data.webPages?.value || [];
       
-      return results.map((r: any, index: number) => `[Reference ${index + 1}]\nTitle: ${r.name}\nSnippet: ${r.snippet}\nURL: ${r.url}`).join('\n\n');
+      return results.map((r: any) => ({
+        title: r.name,
+        snippet: r.snippet,
+        url: r.url
+      }));
     } catch (error) {
       console.error("Bing Search Error:", error);
       throw error;
     }
   },
 
-  searchTavily: async (query: string, apiKey: string): Promise<string> => {
+  searchTavily: async (query: string, apiKey: string): Promise<SearchResult[]> => {
     try {
       const response = await fetch('https://api.tavily.com/search', {
         method: 'POST',
@@ -44,7 +54,11 @@ export const searchService = {
       const data = await response.json();
       const results = data.results || [];
       
-      return results.map((r: any, index: number) => `[Reference ${index + 1}]\nTitle: ${r.title}\nContent: ${r.content}\nURL: ${r.url}`).join('\n\n');
+      return results.map((r: any) => ({
+        title: r.title,
+        snippet: r.content,
+        url: r.url
+      }));
     } catch (error) {
       console.error("Tavily Search Error:", error);
       throw error;
