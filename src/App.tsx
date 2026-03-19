@@ -4,13 +4,15 @@ import remarkGfm from 'remark-gfm';
 import { 
   Download, Upload, Save, LayoutTemplate, Check, Globe, 
   Edit2, Eye, Settings, Menu, Plus, Trash2, Sparkles, X,
-  FileText, Code, Type, History, Clock, MoreVertical, ChevronRight, User
+  FileText, Code, Type, History, Clock, MoreVertical, ChevronRight, User,
+  Heart, Share2, MessageCircle, Bookmark
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { storageService } from './services/storage';
 import { aiService } from './services/ai';
 import { searchService } from './services/search';
 import { viralScriptService, ViralScript } from './services/viralScriptService';
+import { supabaseService } from './services/supabase';
 import { pb, isAuthenticated, getCurrentUser } from './services/pocketbase';
 import { Document, EditorMode, AppSettings, Snapshot } from './types';
 
@@ -92,7 +94,17 @@ const translations = {
     download: "Download",
     useAsReference: "Use as Reference",
     referenceSelected: "Reference Selected: ",
-    clearReference: "Clear Reference"
+    clearReference: "Clear Reference",
+    backupMode: "Backup Mode",
+    backupPocketBase: "PocketBase Only",
+    backupSupabase: "Supabase Only",
+    syncToEditor: "Sync to Editor",
+    syncSuccess: "Synced to editor (Not saved locally)",
+    backupBoth: "Both (Sequential)",
+    supabaseUrl: "Supabase URL",
+    supabaseKey: "Supabase Key",
+    pocketbaseUrl: "PocketBase URL",
+    pocketbaseToken: "PocketBase Token"
   },
   zh: {
     appName: "超便利编辑器",
@@ -171,7 +183,17 @@ const translations = {
     download: "下载文案",
     useAsReference: "设为预热参考",
     referenceSelected: "当前预热参考：",
-    clearReference: "取消参考"
+    clearReference: "取消参考",
+    backupMode: "备份模式",
+    backupPocketBase: "仅 PocketBase",
+    backupSupabase: "仅 Supabase",
+    syncToEditor: "同步到编辑器",
+    syncSuccess: "已同步到编辑器（未保存到本地）",
+    backupBoth: "同时备份 (按顺序)",
+    supabaseUrl: "Supabase URL",
+    supabaseKey: "Supabase Key",
+    pocketbaseUrl: "PocketBase URL",
+    pocketbaseToken: "PocketBase Token"
   }
 };
 
@@ -297,6 +319,7 @@ export default function App() {
   // UI State
   const [isSaved, setIsSaved] = useState(true);
   const [showSaveToast, setShowSaveToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
   const [activePane, setActivePane] = useState<'editor' | 'preview' | null>(null);
   const [mobileView, setMobileView] = useState<'editor' | 'preview'>('editor');
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -307,7 +330,12 @@ export default function App() {
   const [searchSources, setSearchSources] = useState<{title: string, url: string}[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isCollectModalOpen, setIsCollectModalOpen] = useState(false);
-  const [collectData, setCollectData] = useState({ title: '', category: '', notes: '', isPublic: false });
+  const [collectData, setCollectData] = useState({ 
+    title: '', 
+    category: '',
+    likesCount: '',
+    collectsCount: '',
+  });
   const [isCollecting, setIsCollecting] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -504,6 +532,7 @@ export default function App() {
       setCollectData(prev => ({ ...prev, title: filename || t.untitled }));
       setIsCollectModalOpen(true);
     } else {
+      setToastMessage(t.saveSuccess);
       setShowSaveToast(true);
       setTimeout(() => setShowSaveToast(false), 2000);
     }
@@ -511,20 +540,54 @@ export default function App() {
 
   const handleConfirmCloudSync = async () => {
     setIsCollecting(true);
+    const scriptData = {
+      title: collectData.title || filename || t.untitled,
+      content: markdown,
+      category: collectData.category,
+      likes_count: parseInt(collectData.likesCount) || 0,
+      collects_count: parseInt(collectData.collectsCount) || 0,
+    };
+
     try {
-      await viralScriptService.saveViralScript({
-        title: collectData.title || filename || t.untitled,
-        content: markdown,
-        category: collectData.category,
-        analysis_notes: collectData.notes,
-        is_public: collectData.isPublic,
-      });
+      const mode = settings.backupMode || 'pocketbase';
+      
+      // Sequential backup logic
+      if (mode === 'pocketbase' || mode === 'both') {
+        await viralScriptService.savePost(scriptData, settings.pocketbaseUrl);
+      }
+      
+      if (mode === 'supabase' || mode === 'both') {
+        await supabaseService.savePost(
+          scriptData, 
+          settings.supabaseUrl, 
+          settings.supabaseKey
+        );
+      }
+
+      setToastMessage(t.saveSuccess);
       setShowSaveToast(true);
       setTimeout(() => setShowSaveToast(false), 2000);
       setIsCollectModalOpen(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Cloud sync failed:", error);
-      alert("Cloud sync failed. Please check your configuration.");
+      let errorMsg = "Cloud sync failed. Please check your configuration.";
+      
+      if (error.response?.data) {
+        const details = Object.entries(error.response.data)
+          .map(([field, info]: [string, any]) => {
+            let msg = `${field}: ${info.message}`;
+            if (field === 'author' && info.code === 'validation_required') {
+              msg += ' (请在设置中填写 Default Author ID，或在 PocketBase 中将此字段设为非必填)';
+            }
+            return msg;
+          })
+          .join('\n');
+        errorMsg += `\n\n验证错误详情:\n${details}`;
+      } else if (error.message) {
+        errorMsg += `\n\nError: ${error.message}`;
+      }
+      
+      alert(errorMsg);
     } finally {
       setIsCollecting(false);
     }
@@ -582,6 +645,35 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleSyncToEditor = async (script: ViralScript) => {
+    if (!pbConnected) {
+      setToastMessage("PocketBase not connected");
+      setShowSaveToast(true);
+      setTimeout(() => setShowSaveToast(false), 2000);
+      return;
+    }
+
+    try {
+      // Fetch the latest version from DB
+      const originalScript = await viralScriptService.getViralScriptById(script.id!, settings.pocketbaseUrl);
+      
+      setMarkdown(originalScript.content);
+      setFilename(originalScript.title);
+      setIsSaved(false);
+      setIsViralLibraryOpen(false);
+      
+      // Show toast
+      setToastMessage(t.syncSuccess);
+      setShowSaveToast(true);
+      setTimeout(() => setShowSaveToast(false), 2000);
+    } catch (error) {
+      console.error("Failed to sync from DB:", error);
+      setToastMessage("Sync failed");
+      setShowSaveToast(true);
+      setTimeout(() => setShowSaveToast(false), 2000);
+    }
+  };
+
   const handleAiOptimize = async () => {
     setIsAiLoading(true);
     try {
@@ -616,14 +708,14 @@ export default function App() {
       let isFormattingMode = false;
 
       if (selectedViralScript) {
-        viralContext = `[Selected Viral Reference]\nTitle: ${selectedViralScript.title}\nCategory: ${selectedViralScript.category}\nNotes: ${selectedViralScript.analysis_notes}\nContent: ${selectedViralScript.content}`;
+        viralContext = `[Selected Viral Reference]\nTitle: ${selectedViralScript.title}\nHook: ${selectedViralScript.category}\nContent: ${selectedViralScript.content}`;
       } else if (pbConnected) {
         setGenProgress(t.prewarming);
         try {
           const similarScripts = await viralScriptService.searchSimilarScripts(searchQuery);
           if (similarScripts && similarScripts.length > 0) {
             viralContext = similarScripts.map((s, i) => 
-              `[Viral Reference ${i + 1}]\nTitle: ${s.title}\nCategory: ${s.category}\nNotes: ${s.analysis_notes}\nContent Snippet: ${s.content.substring(0, 500)}...`
+              `[Viral Reference ${i + 1}]\nTitle: ${s.title}\nHook: ${s.category}\nContent Snippet: ${s.content.substring(0, 500)}...`
             ).join('\n\n');
           } else {
             if (isLongInput) isFormattingMode = true;
@@ -1474,6 +1566,98 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Backup Configuration */}
+                <div className="pt-4 border-t border-gray-100">
+                  <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">{t.backupMode}</h4>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'pocketbase', label: t.backupPocketBase },
+                        { id: 'supabase', label: t.backupSupabase },
+                        { id: 'both', label: t.backupBoth }
+                      ].map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => {
+                            const newSettings: AppSettings = { ...settings, backupMode: m.id as any };
+                            updateSettings(newSettings);
+                          }}
+                          className={`py-2 px-1 rounded-lg border text-[10px] font-bold transition-all ${
+                            (settings.backupMode || 'both') === m.id
+                              ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm'
+                              : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {((settings.backupMode || 'both') === 'pocketbase' || (settings.backupMode || 'both') === 'both') && (
+                      <div className="space-y-3 p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
+                        <div className="space-y-1.5">
+                          <span className="text-xs text-gray-500">{t.pocketbaseUrl}</span>
+                          <input 
+                            type="text"
+                            value={settings.pocketbaseUrl || ''}
+                            onChange={(e) => {
+                              const newSettings: AppSettings = { ...settings, pocketbaseUrl: e.target.value };
+                              updateSettings(newSettings);
+                            }}
+                            placeholder="https://your-pocketbase.io"
+                            className="w-full p-2.5 bg-white rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <span className="text-xs text-gray-500">Default Author ID (Optional)</span>
+                          <input 
+                            type="text"
+                            value={settings.defaultAuthorId || ''}
+                            onChange={(e) => {
+                              const newSettings: AppSettings = { ...settings, defaultAuthorId: e.target.value };
+                              updateSettings(newSettings);
+                            }}
+                            placeholder="e.g. 1234567890abcdef"
+                            className="w-full p-2.5 bg-white rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          />
+                          <p className="text-[10px] text-gray-400 italic">If your PocketBase requires an author but you are not logged in.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {((settings.backupMode || 'both') === 'supabase' || (settings.backupMode || 'both') === 'both') && (
+                      <div className="space-y-3 p-3 bg-indigo-50/50 rounded-xl border border-indigo-100">
+                        <div className="space-y-1.5">
+                          <span className="text-xs text-gray-500">{t.supabaseUrl}</span>
+                          <input 
+                            type="text"
+                            value={settings.supabaseUrl || ''}
+                            onChange={(e) => {
+                              const newSettings: AppSettings = { ...settings, supabaseUrl: e.target.value };
+                              updateSettings(newSettings);
+                            }}
+                            placeholder="https://your-project.supabase.co"
+                            className="w-full p-2.5 bg-white rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <span className="text-xs text-gray-500">{t.supabaseKey}</span>
+                          <input 
+                            type="password"
+                            value={settings.supabaseKey || ''}
+                            onChange={(e) => {
+                              const newSettings: AppSettings = { ...settings, supabaseKey: e.target.value };
+                              updateSettings(newSettings);
+                            }}
+                            placeholder="your-anon-key"
+                            className="w-full p-2.5 bg-white rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-xs"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Labs / Future */}
                 <div className="pt-4 border-t border-gray-100">
                   <h4 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">{t.labs}</h4>
@@ -1580,35 +1764,50 @@ export default function App() {
                       <div key={script.id} className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col gap-3 shadow-sm hover:shadow-md transition-shadow">
                         <div className="flex items-start justify-between gap-2">
                           <h4 className="font-bold text-gray-800 line-clamp-2">{script.title}</h4>
-                          {script.category && (
-                            <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase shrink-0">
-                              {script.category}
-                            </span>
-                          )}
                         </div>
-                        {script.analysis_notes && (
-                          <p className="text-xs text-gray-500 line-clamp-2 bg-gray-50 p-2 rounded">
-                            <span className="font-semibold text-gray-700">Notes: </span>
-                            {script.analysis_notes}
-                          </p>
+                        
+                        <div className="flex items-center gap-4 text-[10px] text-gray-500 font-medium">
+                          <span className="flex items-center gap-1">
+                            <Heart size={10} className="text-rose-500" />
+                            {script.likes_count || 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Bookmark size={10} className="text-blue-500" />
+                            {script.collects_count || 0}
+                          </span>
+                        </div>
+
+                        {script.category && (
+                          <div className="text-[10px] bg-amber-50 text-amber-800 p-2 rounded-lg border border-amber-100 italic">
+                            <span className="font-bold not-italic mr-1">Hook:</span>
+                            "{script.category}"
+                          </div>
                         )}
+
                         <p className="text-sm text-gray-600 line-clamp-3 flex-1">
                           {script.content.substring(0, 150)}...
                         </p>
-                        <div className="flex items-center gap-2 pt-3 border-t border-gray-100 mt-auto">
+                        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-gray-100 mt-auto">
                           <button 
                             onClick={() => handleDownloadViral(script)}
-                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg transition-colors"
+                            className="flex-1 min-w-[80px] flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg transition-colors"
                           >
                             <Download size={14} />
                             {t.download}
+                          </button>
+                          <button 
+                            onClick={() => handleSyncToEditor(script)}
+                            className="flex-1 min-w-[80px] flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition-colors border border-blue-100"
+                          >
+                            <Sparkles size={14} />
+                            {t.syncToEditor}
                           </button>
                           <button 
                             onClick={() => {
                               setSelectedViralScript(script);
                               setIsViralLibraryOpen(false);
                             }}
-                            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-colors ${
+                            className={`flex-1 min-w-[80px] flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-colors ${
                               selectedViralScript?.id === script.id
                                 ? 'bg-emerald-100 text-emerald-700 cursor-default'
                                 : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
@@ -1654,7 +1853,7 @@ export default function App() {
                   <X size={20} />
                 </button>
               </div>
-              <div className="p-6 space-y-4">
+              <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
                 <div className="space-y-1.5">
                   <label className="text-sm font-semibold text-gray-700">{t.collectTitle}</label>
                   <input 
@@ -1665,34 +1864,39 @@ export default function App() {
                     className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
                   />
                 </div>
+
                 <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-gray-700">{t.collectCategory}</label>
+                  <label className="text-sm font-semibold text-gray-700">黄金开头 (Hook)</label>
                   <input 
                     type="text"
                     value={collectData.category}
                     onChange={(e) => setCollectData({ ...collectData, category: e.target.value })}
-                    placeholder={t.collectCategoryPlaceholder}
+                    placeholder="前3秒吸引人的话..."
                     className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-gray-700">{t.collectNotes}</label>
-                  <textarea 
-                    value={collectData.notes}
-                    onChange={(e) => setCollectData({ ...collectData, notes: e.target.value })}
-                    placeholder={t.collectNotesPlaceholder}
-                    className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm h-24 resize-none"
-                  />
-                </div>
-                <div className="flex items-center gap-2 pt-2">
-                  <input 
-                    type="checkbox"
-                    id="isPublic"
-                    checked={collectData.isPublic}
-                    onChange={(e) => setCollectData({ ...collectData, isPublic: e.target.checked })}
-                    className="w-4 h-4 text-emerald-600 border-gray-300 rounded focus:ring-emerald-500"
-                  />
-                  <label htmlFor="isPublic" className="text-sm font-medium text-gray-700">{t.collectPublic}</label>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-semibold text-gray-700">点赞数</label>
+                    <input 
+                      type="text"
+                      value={collectData.likesCount}
+                      onChange={(e) => setCollectData({ ...collectData, likesCount: e.target.value })}
+                      placeholder="0"
+                      className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-semibold text-gray-700">收藏数</label>
+                    <input 
+                      type="text"
+                      value={collectData.collectsCount}
+                      onChange={(e) => setCollectData({ ...collectData, collectsCount: e.target.value })}
+                      placeholder="0"
+                      className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-sm"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
@@ -1733,7 +1937,7 @@ export default function App() {
             className="fixed bottom-20 md:bottom-6 right-1/2 translate-x-1/2 md:translate-x-0 md:right-6 flex items-center gap-2 px-4 py-3 bg-gray-900 text-white rounded-lg shadow-xl z-50 whitespace-nowrap"
           >
             <Check size={18} className="text-emerald-400" />
-            <span className="text-sm font-medium">{t.saveSuccess}</span>
+            <span className="text-sm font-medium">{toastMessage}</span>
           </motion.div>
         )}
       </AnimatePresence>

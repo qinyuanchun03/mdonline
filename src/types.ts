@@ -25,7 +25,10 @@ export interface AppSettings {
   bingApiKey?: string;
   tavilyApiKey?: string;
   pocketbaseUrl?: string;
-  pocketbaseToken?: string;
+  defaultAuthorId?: string;
+  supabaseUrl?: string;
+  supabaseKey?: string;
+  backupMode: 'pocketbase' | 'supabase' | 'both';
   autoSave: boolean;
   persona: 'classic' | 'immersive';
 }
