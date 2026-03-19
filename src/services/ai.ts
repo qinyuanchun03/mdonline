@@ -178,13 +178,42 @@ export const aiService = {
     
     let userPrompt = "";
     if (viralContext) {
-      userPrompt += `【爆款库参考（用于风格摸底）】：\n${viralContext}\n\n`;
+      userPrompt += `【爆款库参考（用于预热、对准和语句熟悉）】：\n${viralContext}\n\n`;
+      userPrompt += `【强制要求】：在生成之前，你必须深度预热并熟悉上述爆款文案的语句结构、语气和用词习惯。在结合搜索资料时，必须严格对准该爆款的行文风格，绝对避免因为搜索资料的生硬而产生离谱、书面化或不符合人设的语句。\n\n`;
     }
     if (searchContext) {
       userPrompt += `【搜索参考资料（用于事实依据）】：\n${searchContext}\n\n`;
     }
     userPrompt += `请结合以上资料，为电影《${content}》创作一份${persona === 'classic' ? '专业、幽默且视角独特的长篇说书式' : '富有画面感和情绪的'}解说文案。`;
     
+    return aiService.generateContent(userPrompt, apiKey, baseUrl, modelId, systemInstruction);
+  },
+
+  formatMessyScript: async (
+    content: string,
+    apiKey?: string,
+    baseUrl?: string,
+    modelId?: string,
+    searchContext?: string
+  ): Promise<AIResponse> => {
+    const systemInstruction = `
+      你是一个专业的短视频文案排版与优化专家。
+      用户输入了一段未经整理的“乱文案”（可能是语音识别结果、草稿或粗糙的剧情描述）。
+      你的任务是：
+      1. 按照短视频解说文案的语义和节奏，对其进行格式化和精修。
+      2. 修正错别字、语病，理顺逻辑。
+      3. 增加适当的段落划分，使其适合提词器阅读或配音。
+      4. 结合提供的搜索参考资料（如果有），补充缺失的关键信息（如人名、地名、核心设定），但不要改变原意。
+
+      直接输出格式化后的文案，使用 Markdown 格式。不要输出任何解释性的话语。
+    `;
+
+    let userPrompt = `【待格式化的乱文案】：\n${content}\n\n`;
+    if (searchContext) {
+      userPrompt += `【搜索参考资料（用于核对事实和补充细节）】：\n${searchContext}\n\n`;
+    }
+    userPrompt += `请对上述文案进行语义格式化和精修。`;
+
     return aiService.generateContent(userPrompt, apiKey, baseUrl, modelId, systemInstruction);
   }
 };

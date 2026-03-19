@@ -10,7 +10,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { storageService } from './services/storage';
 import { aiService } from './services/ai';
 import { searchService } from './services/search';
-import { viralScriptService } from './services/supabase';
+import { viralScriptService, ViralScript } from './services/viralScriptService';
+import { pb, isAuthenticated, getCurrentUser } from './services/pocketbase';
 import { Document, EditorMode, AppSettings, Snapshot } from './types';
 
 const translations = {
@@ -34,7 +35,7 @@ const translations = {
     settings: "Settings",
     labs: "Labs (Beta)",
     aiAssistant: "AI Assistant",
-    supabaseSync: "Supabase Sync",
+    pocketbaseSync: "PocketBase Sync",
     editorMode: "Editor Mode",
     history: "History",
     newDoc: "New Document",
@@ -86,7 +87,12 @@ const translations = {
     collectSubmit: "Confirm Collection",
     collectCancel: "Cancel",
     collectNotes: "Analysis Notes",
-    collectNotesPlaceholder: "Add some insights or performance analysis..."
+    collectNotesPlaceholder: "Add some insights or performance analysis...",
+    viralLibrary: "Viral Library",
+    download: "Download",
+    useAsReference: "Use as Reference",
+    referenceSelected: "Reference Selected: ",
+    clearReference: "Clear Reference"
   },
   zh: {
     appName: "超便利编辑器",
@@ -108,7 +114,7 @@ const translations = {
     settings: "设置",
     labs: "实验室 (测试版)",
     aiAssistant: "AI 助手",
-    supabaseSync: "Supabase 同步",
+    pocketbaseSync: "PocketBase 同步",
     editorMode: "编辑器模式",
     history: "历史记录",
     newDoc: "新建文档",
@@ -160,7 +166,12 @@ const translations = {
     collectSubmit: "确认收录",
     collectCancel: "取消",
     collectNotes: "分析笔记",
-    collectNotesPlaceholder: "添加一些见解或表现分析..."
+    collectNotesPlaceholder: "添加一些见解或表现分析...",
+    viralLibrary: "爆款文案库",
+    download: "下载文案",
+    useAsReference: "设为预热参考",
+    referenceSelected: "当前预热参考：",
+    clearReference: "取消参考"
   }
 };
 
@@ -300,8 +311,12 @@ export default function App() {
   const [isCollecting, setIsCollecting] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [supabaseConnected, setSupabaseConnected] = useState<boolean | null>(null);
+  const [pbConnected, setPbConnected] = useState<boolean | null>(null);
   const [settingsStatus, setSettingsStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
+  const [isViralLibraryOpen, setIsViralLibraryOpen] = useState(false);
+  const [viralScripts, setViralScripts] = useState<ViralScript[]>([]);
+  const [isLoadingViral, setIsLoadingViral] = useState(false);
+  const [selectedViralScript, setSelectedViralScript] = useState<ViralScript | null>(null);
   const settingsTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isFirstSettingsChange = useRef(true);
 
@@ -355,13 +370,13 @@ export default function App() {
     return () => document.removeEventListener('click', handleClickOutside);
   }, []);
 
-  // Supabase Connection Check
+  // PocketBase Connection Check
   useEffect(() => {
-    const checkSupabase = async () => {
+    const checkPocketBase = async () => {
       const isConnected = await viralScriptService.checkConnection();
-      setSupabaseConnected(isConnected);
+      setPbConnected(isConnected);
     };
-    checkSupabase();
+    checkPocketBase();
   }, [settings]);
 
   // Auto-save debounced
@@ -484,8 +499,8 @@ export default function App() {
     storageService.saveDocuments(updatedDocs);
     setIsSaved(true);
 
-    // 2. Cloud Sync (Supabase) if connected - Open Modal
-    if (supabaseConnected) {
+    // 2. Cloud Sync (PocketBase) if connected - Open Modal
+    if (pbConnected) {
       setCollectData(prev => ({ ...prev, title: filename || t.untitled }));
       setIsCollectModalOpen(true);
     } else {
@@ -541,6 +556,32 @@ export default function App() {
     }
   };
 
+  const handleOpenViralLibrary = async () => {
+    setIsViralLibraryOpen(true);
+    if (!pbConnected) return;
+    setIsLoadingViral(true);
+    try {
+      const scripts = await viralScriptService.getViralScripts();
+      setViralScripts(scripts || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoadingViral(false);
+    }
+  };
+
+  const handleDownloadViral = (script: ViralScript) => {
+    const blob = new Blob([script.content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${script.title}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleAiOptimize = async () => {
     setIsAiLoading(true);
     try {
@@ -566,28 +607,39 @@ export default function App() {
     try {
       let searchContext = "";
       const currentProvider = settings.searchProvider || 'bing';
-      const movieName = markdown.trim();
+      const rawInput = markdown.trim();
+      const isLongInput = rawInput.length > 50;
+      const searchQuery = isLongInput ? rawInput.substring(0, 30) : rawInput;
       
-      // 0. Pre-warmup: Search viral database
+      // 0. Pre-warmup: Search viral database or use selected
       let viralContext = "";
-      if (supabaseConnected) {
+      let isFormattingMode = false;
+
+      if (selectedViralScript) {
+        viralContext = `[Selected Viral Reference]\nTitle: ${selectedViralScript.title}\nCategory: ${selectedViralScript.category}\nNotes: ${selectedViralScript.analysis_notes}\nContent: ${selectedViralScript.content}`;
+      } else if (pbConnected) {
         setGenProgress(t.prewarming);
         try {
-          const similarScripts = await viralScriptService.searchSimilarScripts(movieName);
+          const similarScripts = await viralScriptService.searchSimilarScripts(searchQuery);
           if (similarScripts && similarScripts.length > 0) {
             viralContext = similarScripts.map((s, i) => 
               `[Viral Reference ${i + 1}]\nTitle: ${s.title}\nCategory: ${s.category}\nNotes: ${s.analysis_notes}\nContent Snippet: ${s.content.substring(0, 500)}...`
             ).join('\n\n');
+          } else {
+            if (isLongInput) isFormattingMode = true;
           }
         } catch (e) {
           console.warn("Pre-warmup failed", e);
+          if (isLongInput) isFormattingMode = true;
         }
+      } else {
+        if (isLongInput) isFormattingMode = true;
       }
 
       // 1. Search for references
       setGenProgress(t.searching);
-      const doubanQuery = `${movieName} site:douban.com`;
-      const generalQuery = `${movieName} 剧情 电影解说`;
+      const doubanQuery = `${searchQuery} site:douban.com`;
+      const generalQuery = `${searchQuery} 剧情 电影解说`;
       
       let allResults: any[] = [];
       
@@ -621,27 +673,38 @@ export default function App() {
       searchContext = uniqueResults.map((r, i) => `[Reference ${i + 1}]\nTitle: ${r.title}\nContent: ${r.snippet}\nURL: ${r.url}`).join('\n\n');
       
       setGenProgress(t.generating);
-      const result = await aiService.generateMovieReview(
-        movieName, 
-        settings.aiApiKey, 
-        settings.aiBaseUrl, 
-        settings.aiModelId, 
-        searchContext, 
-        viralContext,
-        settings.persona
-      );
-      
-      // Append references to the end in a clean bibliography style
-      let finalContent = result.text;
-      if (uniqueResults.length > 0) {
-        finalContent += `\n\n---\n**${t.references}**\n\n`;
-        uniqueResults.forEach((r, i) => {
-          finalContent += `[${i + 1}] ${r.title}  \n&nbsp;&nbsp;&nbsp;&nbsp;🔗 [${r.url}](${r.url})\n\n`;
-        });
+      let finalContent = "";
+
+      if (isFormattingMode) {
+        const result = await aiService.formatMessyScript(
+          rawInput,
+          settings.aiApiKey,
+          settings.aiBaseUrl,
+          settings.aiModelId,
+          searchContext
+        );
+        finalContent = result.text;
+      } else {
+        const result = await aiService.generateMovieReview(
+          rawInput, 
+          settings.aiApiKey, 
+          settings.aiBaseUrl, 
+          settings.aiModelId, 
+          searchContext, 
+          viralContext,
+          settings.persona
+        );
+        finalContent = result.text;
       }
 
       setMarkdown(finalContent);
       setIsSaved(false);
+
+      if (isFormattingMode) {
+        setTimeout(() => {
+          setIsCollectModalOpen(true);
+        }, 500);
+      }
     } catch (error: any) {
       alert(error.message || "AI Error");
     } finally {
@@ -809,8 +872,8 @@ export default function App() {
               </div>
               <div className="p-4 border-t border-gray-100 bg-gray-50">
                 <div className="flex items-center gap-2 text-xs text-gray-400">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                  {t.supabaseSync} (Coming Soon)
+                  <div className={`w-2 h-2 rounded-full ${pbConnected ? 'bg-emerald-500' : 'bg-gray-300'}`}></div>
+                  {t.pocketbaseSync}
                 </div>
               </div>
             </motion.div>
@@ -859,6 +922,16 @@ export default function App() {
             {/* Desktop Actions */}
             <div className="hidden md:flex items-center gap-2">
               <div className="flex bg-gray-100 p-1 rounded-lg gap-1">
+                {pbConnected && (
+                  <button 
+                    onClick={handleOpenViralLibrary}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-all text-emerald-700 hover:bg-white hover:shadow-sm"
+                    title={t.viralLibrary}
+                  >
+                    <Globe size={14} />
+                    <span>{t.viralLibrary}</span>
+                  </button>
+                )}
                 <button 
                   onClick={handleAiOptimize}
                   disabled={isAiLoading}
@@ -920,7 +993,7 @@ export default function App() {
                 onClick={handleUnifiedSave}
                 disabled={isCollecting}
                 className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-all shadow-sm ${
-                  supabaseConnected 
+                  pbConnected 
                     ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
                     : 'bg-indigo-600 text-white hover:bg-indigo-700'
                 }`}
@@ -930,7 +1003,7 @@ export default function App() {
                 ) : (
                   <Save size={14} />
                 )}
-                <span>{supabaseConnected ? t.save : t.saveVersion}</span>
+                <span>{pbConnected ? t.save : t.saveVersion}</span>
               </button>
 
               <button 
@@ -946,7 +1019,7 @@ export default function App() {
               <button 
                 onClick={handleUnifiedSave}
                 disabled={isCollecting}
-                className={`p-2 rounded-lg shadow-sm text-white ${supabaseConnected ? 'bg-emerald-600' : 'bg-indigo-600'}`}
+                className={`p-2 rounded-lg shadow-sm text-white ${pbConnected ? 'bg-emerald-600' : 'bg-indigo-600'}`}
               >
                 {isCollecting ? (
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -1001,6 +1074,24 @@ export default function App() {
             </div>
           </div>
         </header>
+
+        {/* Selected Reference Banner */}
+        {selectedViralScript && (
+          <div className="bg-emerald-50 border-b border-emerald-100 px-4 py-2 flex items-center justify-between text-sm shrink-0">
+            <div className="flex items-center gap-2 text-emerald-800">
+              <Check size={16} className="text-emerald-500" />
+              <span className="font-medium">{t.referenceSelected}</span>
+              <span className="font-bold truncate max-w-xs md:max-w-md">{selectedViralScript.title}</span>
+            </div>
+            <button 
+              onClick={() => setSelectedViralScript(null)}
+              className="text-emerald-600 hover:text-emerald-800 text-xs font-medium flex items-center gap-1 bg-emerald-100/50 hover:bg-emerald-100 px-2 py-1 rounded transition-colors"
+            >
+              <X size={14} />
+              {t.clearReference}
+            </button>
+          </div>
+        )}
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
@@ -1390,9 +1481,11 @@ export default function App() {
                     <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-dashed border-gray-300 opacity-60">
                       <div className="flex items-center gap-3">
                         <History size={18} />
-                        <span className="text-sm font-medium">{t.supabaseSync}</span>
+                        <span className="text-sm font-medium">{t.pocketbaseSync}</span>
                       </div>
-                      <span className="text-[10px] font-bold text-gray-400">OFF</span>
+                      <span className={`text-[10px] font-bold ${pbConnected ? 'text-emerald-500' : 'text-gray-400'}`}>
+                        {pbConnected ? 'ON' : 'OFF'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1446,6 +1539,97 @@ export default function App() {
               exit={{ opacity: 0 }}
               onClick={() => setIsSettingsOpen(false)}
               className="fixed inset-0 bg-black/40 backdrop-blur-md z-[-1]"
+            />
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Viral Library Modal */}
+      <AnimatePresence>
+        {isViralLibraryOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden relative z-10"
+            >
+              <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-emerald-50 shrink-0">
+                <h3 className="font-bold text-emerald-800 flex items-center gap-2">
+                  <Globe size={18} />
+                  {t.viralLibrary}
+                </h3>
+                <button onClick={() => setIsViralLibraryOpen(false)} className="p-1 hover:bg-emerald-100 rounded-full transition-colors text-emerald-600">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-6 bg-gray-50 custom-scrollbar">
+                {isLoadingViral ? (
+                  <div className="flex flex-col items-center justify-center h-64 text-emerald-600 gap-4">
+                    <div className="w-8 h-8 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"></div>
+                    <p className="text-sm font-medium">Loading viral scripts...</p>
+                  </div>
+                ) : viralScripts.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-64 text-gray-400 gap-2">
+                    <FileText size={48} className="opacity-20" />
+                    <p>No viral scripts found.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {viralScripts.map((script) => (
+                      <div key={script.id} className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col gap-3 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-start justify-between gap-2">
+                          <h4 className="font-bold text-gray-800 line-clamp-2">{script.title}</h4>
+                          {script.category && (
+                            <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase shrink-0">
+                              {script.category}
+                            </span>
+                          )}
+                        </div>
+                        {script.analysis_notes && (
+                          <p className="text-xs text-gray-500 line-clamp-2 bg-gray-50 p-2 rounded">
+                            <span className="font-semibold text-gray-700">Notes: </span>
+                            {script.analysis_notes}
+                          </p>
+                        )}
+                        <p className="text-sm text-gray-600 line-clamp-3 flex-1">
+                          {script.content.substring(0, 150)}...
+                        </p>
+                        <div className="flex items-center gap-2 pt-3 border-t border-gray-100 mt-auto">
+                          <button 
+                            onClick={() => handleDownloadViral(script)}
+                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg transition-colors"
+                          >
+                            <Download size={14} />
+                            {t.download}
+                          </button>
+                          <button 
+                            onClick={() => {
+                              setSelectedViralScript(script);
+                              setIsViralLibraryOpen(false);
+                            }}
+                            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-colors ${
+                              selectedViralScript?.id === script.id
+                                ? 'bg-emerald-100 text-emerald-700 cursor-default'
+                                : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+                            }`}
+                          >
+                            <Check size={14} />
+                            {selectedViralScript?.id === script.id ? 'Selected' : t.useAsReference}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsViralLibraryOpen(false)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-md z-0"
             />
           </div>
         )}

@@ -24,8 +24,8 @@ export interface AppSettings {
   searchProvider: 'bing' | 'tavily';
   bingApiKey?: string;
   tavilyApiKey?: string;
-  supabaseUrl?: string;
-  supabaseKey?: string;
+  pocketbaseUrl?: string;
+  pocketbaseToken?: string;
   autoSave: boolean;
   persona: 'classic' | 'immersive';
 }
